@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lector PDF con OCR</title>
+
+  <meta name="theme-color" content="#111111">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f2f2f2;
+      color: #222;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: #111;
+      color: white;
+      padding: 12px;
+      text-align: center;
+    }
+
+    header h1 {
+      margin: 0 0 10px;
+      font-size: 20px;
+    }
+
+    .controls {
+      display: grid;
+      gap: 8px;
+    }
+
+    input[type="file"],
+    button,
+    select {
+      width: 100%;
+      padding: 13px;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+    }
+
+    input[type="file"],
+    select {
+      background: white;
+      color: #111;
+    }
+
+    button {
+      background: #007bff;
+      color: white;
+      font-weight: bold;
+    }
+
+    button.secondary {
+      background: #444;
+    }
+
+    button.danger {
+      background: #c0392b;
+    }
+
+    button.ocr {
+      background: #8e44ad;
+    }
+
+    #status {
+      padding: 10px;
+      font-size: 14px;
+      background: #fff3cd;
+      color: #5c4600;
+      text-align: center;
+      display: none;
+    }
+
+    main {
+      padding: 10px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .tabs button {
+      flex: 1;
+      background: #ddd;
+      color: #111;
+    }
+
+    .tabs button.active {
+      background: #111;
+      color: white;
+    }
+
+    section {
+      display: none;
+      background: white;
+      border-radius: 12px;
+      padding: 12px;
+      min-height: 65vh;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }
+
+    section.active {
+      display: block;
+    }
+
+    canvas {
+      width: 100%;
+      height: auto;
+      display: block;
+      margin-bottom: 18px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      background: white;
+    }
+
+    #textOutput {
+      white-space: pre-wrap;
+      line-height: 1.6;
+      font-size: 17px;
+    }
+
+    .page-title {
+      font-weight: bold;
+      margin: 15px 0 8px;
+      background: #eee;
+      padding: 8px;
+      border-radius: 8px;
+    }
+
+    .hint {
+      background: #eaf4ff;
+      padding: 10px;
+      border-radius: 10px;
+      font-size: 14px;
+      line-height: 1.4;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Lector PDF con OCR</h1>
+
+  <div class="controls">
+    <input type="file" id="fileInput" accept="application/pdf">
+
+    <select id="ocrLanguage">
+      <option value="spa">OCR en español</option>
+      <option value="eng">OCR en inglés</option>
+      <option value="spa+eng">OCR español + inglés</option>
+    </select>
+
+    <button id="ocrBtn" class="ocr">Hacer OCR al PDF</button>
+    <button id="readBtn">Leer en voz alta</button>
+    <button id="pauseBtn" class="secondary">Pausar / Continuar</button>
+    <button id="stopBtn" class="danger">Detener lectura</button>
+  </div>
+</header>
+
+<div id="status"></div>
+
+<main>
+  <div class="tabs">
+    <button id="viewTab" class="active">Ver PDF</button>
+    <button id="textTab">Texto</button>
+  </div>
+
+  <section id="pdfSection" class="active">
+    <div class="hint">
+      Selecciona un PDF. Si dice que no se puede leer texto, toca <strong>Hacer OCR al PDF</strong>.
+    </div>
+  </section>
+
+  <section id="textSection">
+    <div id="textOutput">Aquí aparecerá el texto del PDF.</div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+<script type="module">
+  import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@5.7.284/build/pdf.mjs";
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdn.jsdelivr.net/npm/pdfjs-dist@5.7.284/build/pdf.worker.mjs";
+
+  const fileInput = document.getElementById("fileInput");
+  const pdfSection = document.getElementById("pdfSection");
+  const textSection = document.getElementById("textSection");
+  const textOutput = document.getElementById("textOutput");
+  const statusBox = document.getElementById("status");
+
+  const viewTab = document.getElementById("viewTab");
+  const textTab = document.getElementById("textTab");
+
+  const readBtn = document.getElementById("readBtn");
+  const pauseBtn = document.getElementById("pauseBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  const ocrBtn = document.getElementById("ocrBtn");
+  const ocrLanguage = document.getElementById("ocrLanguage");
+
+  let extractedText = "";
+  let currentUtterance = null;
+  let currentPdf = null;
+  let currentFileArrayBuffer = null;
+
+  viewTab.addEventListener("click", () => {
+    viewTab.classList.add("active");
+    textTab.classList.remove("active");
+    pdfSection.classList.add("active");
+    textSection.classList.remove("active");
+  });
+
+  textTab.addEventListener("click", () => {
+    textTab.classList.add("active");
+    viewTab.classList.remove("active");
+    textSection.classList.add("active");
+    pdfSection.classList.remove("active");
+  });
+
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files[0];
+
+    if (!file) return;
+
+    if (file.type !== "application/pdf") {
+      showStatus("Selecciona un archivo PDF válido.");
+      return;
+    }
+
+    stopReading();
+
+    pdfSection.innerHTML = `
+      <div class="hint">
+        PDF cargado. Si no aparece texto, toca <strong>Hacer OCR al PDF</strong>.
+      </div>
+    `;
+
+    textOutput.textContent = "Leyendo PDF...";
+    extractedText = "";
+    currentPdf = null;
+    currentFileArrayBuffer = null;
+
+    showStatus("Cargando PDF...");
+
+    try {
+      currentFileArrayBuffer = await file.arrayBuffer();
+
+      currentPdf = await pdfjsLib.getDocument({
+        data: currentFileArrayBuffer.slice(0)
+      }).promise;
+
+      showStatus(`PDF cargado. Total de páginas: ${currentPdf.numPages}`);
+
+      for (let pageNumber = 1; pageNumber <= currentPdf.numPages; pageNumber++) {
+        showStatus(`Mostrando página ${pageNumber} de ${currentPdf.numPages}...`);
+
+        const page = await currentPdf.getPage(pageNumber);
+
+        await renderPage(page, pageNumber);
+
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items
+          .map(item => item.str)
+          .join(" ")
+          .trim();
+
+        if (pageText.length > 0) {
+          extractedText += `\n\n--- Página ${pageNumber} ---\n${pageText}`;
+        }
+      }
+
+      if (extractedText.trim().length > 0) {
+        textOutput.textContent = extractedText.trim();
+        showStatus("Texto extraído correctamente.");
+      } else {
+        textOutput.textContent =
+          "No se pudo leer texto normal del PDF. Probablemente es escaneado. Toca el botón: Hacer OCR al PDF.";
+        showStatus("No se encontró texto. Usa OCR.");
+      }
+
+    } catch (error) {
+      console.error(error);
+      showStatus("Error al abrir el PDF.");
+      textOutput.textContent = "No se pudo leer el archivo PDF.";
+    }
+  });
+
+  ocrBtn.addEventListener("click", async () => {
+    if (!currentPdf) {
+      showStatus("Primero selecciona un PDF.");
+      return;
+    }
+
+    stopReading();
+
+    extractedText = "";
+    textOutput.textContent = "Iniciando OCR...";
+    showTextTab();
+
+    const lang = ocrLanguage.value;
+
+    try {
+      showStatus("Preparando OCR...");
+
+      const worker = await Tesseract.createWorker(lang, 1, {
+        logger: m => {
+          if (m.status && typeof m.progress === "number") {
+            const percent = Math.round(m.progress * 100);
+            showStatus(`${m.status} ${percent}%`);
+          } else if (m.status) {
+            showStatus(m.status);
+          }
+        }
+      });
+
+      for (let pageNumber = 1; pageNumber <= currentPdf.numPages; pageNumber++) {
+        showStatus(`OCR página ${pageNumber} de ${currentPdf.numPages}...`);
+
+        const page = await currentPdf.getPage(pageNumber);
+        const canvas = await pageToCanvasForOCR(page);
+
+        const result = await worker.recognize(canvas);
+        const pageText = result.data.text.trim();
+
+        extractedText += `\n\n--- Página ${pageNumber} OCR ---\n${pageText}`;
+
+        textOutput.textContent = extractedText.trim();
+      }
+
+      await worker.terminate();
+
+      if (extractedText.trim().length > 0) {
+        textOutput.textContent = extractedText.trim();
+        showStatus("OCR terminado.");
+      } else {
+        textOutput.textContent = "No se detectó texto con OCR.";
+        showStatus("OCR terminado sin texto detectado.");
+      }
+
+    } catch (error) {
+      console.error(error);
+      showStatus("Error al hacer OCR.");
+      textOutput.textContent =
+        "No se pudo hacer OCR. Revisa tu conexión o prueba con un PDF más pequeño.";
+    }
+  });
+
+  async function renderPage(page, pageNumber) {
+    const viewportOriginal = page.getViewport({ scale: 1 });
+    const screenWidth = Math.min(window.innerWidth - 24, 900);
+    const scale = screenWidth / viewportOriginal.width;
+    const viewport = page.getViewport({ scale });
+
+    const title = document.createElement("div");
+    title.className = "page-title";
+    title.textContent = `Página ${pageNumber}`;
+    pdfSection.appendChild(title);
+
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+
+    const outputScale = window.devicePixelRatio || 1;
+
+    canvas.width = Math.floor(viewport.width * outputScale);
+    canvas.height = Math.floor(viewport.height * outputScale);
+
+    canvas.style.width = `${viewport.width}px`;
+    canvas.style.height = `${viewport.height}px`;
+
+    context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+
+    pdfSection.appendChild(canvas);
+
+    await page.render({
+      canvasContext: context,
+      viewport
+    }).promise;
+  }
+
+  async function pageToCanvasForOCR(page) {
+    const viewport = page.getViewport({ scale: 2 });
+
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+
+    await page.render({
+      canvasContext: context,
+      viewport
+    }).promise;
+
+    return canvas;
+  }
+
+  function showTextTab() {
+    textTab.classList.add("active");
+    viewTab.classList.remove("active");
+    textSection.classList.add("active");
+    pdfSection.classList.remove("active");
+  }
+
+  readBtn.addEventListener("click", () => {
+    if (!extractedText.trim()) {
+      showStatus("Primero abre un PDF o haz OCR.");
+      return;
+    }
+
+    stopReading();
+
+    currentUtterance = new SpeechSynthesisUtterance(extractedText);
+    currentUtterance.lang = "es-MX";
+    currentUtterance.rate = 1;
+    currentUtterance.pitch = 1;
+
+    speechSynthesis.speak(currentUtterance);
+
+    showStatus("Leyendo en voz alta...");
+  });
+
+  pauseBtn.addEventListener("click", () => {
+    if (speechSynthesis.speaking && !speechSynthesis.paused) {
+      speechSynthesis.pause();
+      showStatus("Lectura pausada.");
+    } else if (speechSynthesis.paused) {
+      speechSynthesis.resume();
+      showStatus("Lectura reanudada.");
+    }
+  });
+
+  stopBtn.addEventListener("click", () => {
+    stopReading();
+    showStatus("Lectura detenida.");
+  });
+
+  function stopReading() {
+    speechSynthesis.cancel();
+    currentUtterance = null;
+  }
+
+  function showStatus(message) {
+    statusBox.style.display = "block";
+    statusBox.textContent = message;
+  }
+</script>
+
+</body>
+</html>
