@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lector PDF Móvil</title>
+
+  <meta name="theme-color" content="#111111">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f2f2f2;
+      color: #222;
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: #111;
+      color: white;
+      padding: 12px;
+      text-align: center;
+    }
+
+    header h1 {
+      margin: 0 0 10px;
+      font-size: 20px;
+    }
+
+    .controls {
+      display: grid;
+      gap: 8px;
+    }
+
+    input[type="file"],
+    button {
+      width: 100%;
+      padding: 13px;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+    }
+
+    input[type="file"] {
+      background: white;
+      color: #111;
+    }
+
+    button {
+      background: #007bff;
+      color: white;
+      font-weight: bold;
+    }
+
+    button.secondary {
+      background: #444;
+    }
+
+    button.danger {
+      background: #c0392b;
+    }
+
+    #status {
+      padding: 10px;
+      font-size: 14px;
+      background: #fff3cd;
+      color: #5c4600;
+      text-align: center;
+      display: none;
+    }
+
+    main {
+      padding: 10px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .tabs button {
+      flex: 1;
+      background: #ddd;
+      color: #111;
+    }
+
+    .tabs button.active {
+      background: #111;
+      color: white;
+    }
+
+    section {
+      display: none;
+      background: white;
+      border-radius: 12px;
+      padding: 12px;
+      min-height: 65vh;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }
+
+    section.active {
+      display: block;
+    }
+
+    canvas {
+      width: 100%;
+      height: auto;
+      display: block;
+      margin-bottom: 18px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      background: white;
+    }
+
+    #textOutput {
+      white-space: pre-wrap;
+      line-height: 1.6;
+      font-size: 17px;
+    }
+
+    .page-title {
+      font-weight: bold;
+      margin: 15px 0 8px;
+      background: #eee;
+      padding: 8px;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Lector PDF Móvil</h1>
+
+  <div class="controls">
+    <input type="file" id="fileInput" accept="application/pdf">
+
+    <button id="readBtn">Leer en voz alta</button>
+    <button id="pauseBtn" class="secondary">Pausar / Continuar</button>
+    <button id="stopBtn" class="danger">Detener lectura</button>
+  </div>
+</header>
+
+<div id="status"></div>
+
+<main>
+  <div class="tabs">
+    <button id="viewTab" class="active">Ver PDF</button>
+    <button id="textTab">Texto</button>
+  </div>
+
+  <section id="pdfSection" class="active">
+    <p>Selecciona un PDF desde tu celular.</p>
+  </section>
+
+  <section id="textSection">
+    <div id="textOutput">Aquí aparecerá el texto del PDF.</div>
+  </section>
+</main>
+
+<script type="module">
+  import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@5.7.284/build/pdf.mjs";
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdn.jsdelivr.net/npm/pdfjs-dist@5.7.284/build/pdf.worker.mjs";
+
+  const fileInput = document.getElementById("fileInput");
+  const pdfSection = document.getElementById("pdfSection");
+  const textSection = document.getElementById("textSection");
+  const textOutput = document.getElementById("textOutput");
+  const statusBox = document.getElementById("status");
+
+  const viewTab = document.getElementById("viewTab");
+  const textTab = document.getElementById("textTab");
+
+  const readBtn = document.getElementById("readBtn");
+  const pauseBtn = document.getElementById("pauseBtn");
+  const stopBtn = document.getElementById("stopBtn");
+
+  let extractedText = "";
+  let currentUtterance = null;
+
+  viewTab.addEventListener("click", () => {
+    viewTab.classList.add("active");
+    textTab.classList.remove("active");
+    pdfSection.classList.add("active");
+    textSection.classList.remove("active");
+  });
+
+  textTab.addEventListener("click", () => {
+    textTab.classList.add("active");
+    viewTab.classList.remove("active");
+    textSection.classList.add("active");
+    pdfSection.classList.remove("active");
+  });
+
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files[0];
+
+    if (!file) return;
+
+    if (file.type !== "application/pdf") {
+      showStatus("Selecciona un archivo PDF válido.");
+      return;
+    }
+
+    stopReading();
+
+    pdfSection.innerHTML = "";
+    textOutput.textContent = "Leyendo PDF...";
+    extractedText = "";
+
+    showStatus("Cargando PDF...");
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+
+      const pdf = await pdfjsLib.getDocument({
+        data: arrayBuffer
+      }).promise;
+
+      showStatus(`PDF cargado. Total de páginas: ${pdf.numPages}`);
+
+      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+        showStatus(`Procesando página ${pageNumber} de ${pdf.numPages}...`);
+
+        const page = await pdf.getPage(pageNumber);
+
+        await renderPage(page, pageNumber);
+
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items
+          .map(item => item.str)
+          .join(" ");
+
+        extractedText += `\n\n--- Página ${pageNumber} ---\n${pageText}`;
+      }
+
+      textOutput.textContent = extractedText.trim() || "No se pudo extraer texto. Puede ser un PDF escaneado como imagen.";
+
+      showStatus("PDF listo.");
+
+    } catch (error) {
+      console.error(error);
+      showStatus("Error al abrir el PDF.");
+      textOutput.textContent = "No se pudo leer el archivo PDF.";
+    }
+  });
+
+  async function renderPage(page, pageNumber) {
+    const viewportOriginal = page.getViewport({ scale: 1 });
+
+    const screenWidth = Math.min(window.innerWidth - 24, 900);
+    const scale = screenWidth / viewportOriginal.width;
+
+    const viewport = page.getViewport({ scale });
+
+    const title = document.createElement("div");
+    title.className = "page-title";
+    title.textContent = `Página ${pageNumber}`;
+    pdfSection.appendChild(title);
+
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+
+    const outputScale = window.devicePixelRatio || 1;
+
+    canvas.width = Math.floor(viewport.width * outputScale);
+    canvas.height = Math.floor(viewport.height * outputScale);
+
+    canvas.style.width = `${viewport.width}px`;
+    canvas.style.height = `${viewport.height}px`;
+
+    context.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+
+    pdfSection.appendChild(canvas);
+
+    await page.render({
+      canvasContext: context,
+      viewport
+    }).promise;
+  }
+
+  readBtn.addEventListener("click", () => {
+    if (!extractedText.trim()) {
+      showStatus("Primero abre un PDF con texto.");
+      return;
+    }
+
+    stopReading();
+
+    currentUtterance = new SpeechSynthesisUtterance(extractedText);
+    currentUtterance.lang = "es-MX";
+    currentUtterance.rate = 1;
+    currentUtterance.pitch = 1;
+
+    speechSynthesis.speak(currentUtterance);
+
+    showStatus("Leyendo en voz alta...");
+  });
+
+  pauseBtn.addEventListener("click", () => {
+    if (speechSynthesis.speaking && !speechSynthesis.paused) {
+      speechSynthesis.pause();
+      showStatus("Lectura pausada.");
+    } else if (speechSynthesis.paused) {
+      speechSynthesis.resume();
+      showStatus("Lectura reanudada.");
+    }
+  });
+
+  stopBtn.addEventListener("click", () => {
+    stopReading();
+    showStatus("Lectura detenida.");
+  });
+
+  function stopReading() {
+    speechSynthesis.cancel();
+    currentUtterance = null;
+  }
+
+  function showStatus(message) {
+    statusBox.style.display = "block";
+    statusBox.textContent = message;
+  }
+</script>
+
+</body>
+</html>
